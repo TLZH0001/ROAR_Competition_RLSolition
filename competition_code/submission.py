@@ -7,6 +7,14 @@ from typing import List, Tuple, Dict, Optional
 import roar_py_interface
 import numpy as np
 
+import roar_py_carla
+import roar_py_rl_carla
+import gymnasium as gym
+from stable_baselines3 import SAC
+from roar_py_rl import base_env
+
+import nest_asyncio
+
 def normalize_rad(rad : float):
     return (rad + np.pi) % (2 * np.pi) - np.pi
 
@@ -20,6 +28,14 @@ def filter_waypoints(location : np.ndarray, current_idx: int, waypoints : List[r
             return i % len(waypoints)
     return current_idx
 
+class SimplifyCarlaActionFilter(gym.ActionWrapper):
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        self._action_space = gym.spaces.Dict({
+            "throttle": gym.spaces.Box(-1.0, 1.0, (1,), np.float32),
+            "steer": gym.spaces.Box(-1.0, 1.0, (1,), np.float32)
+        })
+
 class RoarCompetitionSolution:
     def __init__(
         self,
@@ -31,6 +47,9 @@ class RoarCompetitionSolution:
         rpy_sensor : roar_py_interface.RoarPyRollPitchYawSensor = None,
         occupancy_map_sensor : roar_py_interface.RoarPyOccupancyMapSensor = None,
         collision_sensor : roar_py_interface.RoarPyCollisionSensor = None,
+        local_velocimeter_sensor : roar_py_carla.RoarPyCarlaLocalVelocimeterSensor = None,
+        gyroscope_sensor : roar_py_carla.RoarPyCarlaGyroscopeSensor = None,
+        world : roar_py_carla.RoarPyCarlaWorld = None
     ) -> None:
         self.maneuverable_waypoints = maneuverable_waypoints
         self.vehicle = vehicle
@@ -40,10 +59,49 @@ class RoarCompetitionSolution:
         self.rpy_sensor = rpy_sensor
         self.occupancy_map_sensor = occupancy_map_sensor
         self.collision_sensor = collision_sensor
+        self.local_velocimeter_sensor = local_velocimeter_sensor
+        self.gyroscope_sensor = gyroscope_sensor
+        
+        self.world = world
+        
+        self.env = None
+        self.model = None
+        self.obs = None
+
+
     
     async def initialize(self) -> None:
         # TODO: You can do some initial computation here if you want to.
         # For example, you can compute the path to the first waypoint.
+
+        nest_asyncio.apply()
+        ''' get env '''
+        self.env = roar_py_rl_carla.RoarRLCarlaSimEnv(
+        self.vehicle,
+        self.maneuverable_waypoints,
+        self.location_sensor,
+        self.rpy_sensor,
+        self.local_velocimeter_sensor,
+        self.collision_sensor,
+        waypoint_information_distances=set([-10.0, 0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 100.0]),
+        world = self.world,
+        collision_threshold = 10.0
+        )
+        self.env = SimplifyCarlaActionFilter(self.env)
+        self.env = gym.wrappers.FilterObservation(self.env, ["gyroscope", "waypoints_information", "local_velocimeter"])
+        self.env = gym.wrappers.FlattenObservation(self.env)
+        self.env = roar_py_rl_carla.FlattenActionWrapper(self.env)
+
+        ''' get RL model '''
+        model_path = "models/rl_model_4099796_steps"
+        self.model = SAC.load(
+            model_path,
+            env=self.env
+        )
+
+        ''' reset env '''
+        self.obs, info = self.env.reset()
+        # print('OBS:', self.obs)
 
         # Receive location, rotation and velocity data 
         vehicle_location = self.location_sensor.get_last_gym_observation()
@@ -67,6 +125,11 @@ class RoarCompetitionSolution:
         You can do whatever you want here, including apply_action() to the vehicle.
         """
         # TODO: Implement your solution here.
+
+        ''' get action '''
+        action, _state = self.model.predict(self.obs, deterministic=False)
+        # print('ACTION:', action)
+        self.obs, reward, terminated, truncated, info = self.env.step(action) # this statement causes error
 
         # Receive location, rotation and velocity data 
         vehicle_location = self.location_sensor.get_last_gym_observation()
