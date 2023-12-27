@@ -2,7 +2,8 @@
 Competition instructions:
 Please do not change anything else but fill out the to-do sections.
 """
-
+from stable_baselines3.common.monitor import Monitor
+from wandb.integration.sb3 import WandbCallback
 from typing import List, Tuple, Dict, Optional
 import roar_py_interface
 import numpy as np
@@ -12,6 +13,7 @@ import roar_py_rl_carla
 import gymnasium as gym
 from stable_baselines3 import SAC
 from roar_py_rl import base_env
+import torch as th
 
 import nest_asyncio
 
@@ -84,40 +86,55 @@ class RoarCompetitionSolution:
             self.rpy_sensor,
             self.local_velocimeter_sensor,
             self.collision_sensor,
-            waypoint_information_distances=set([-10.0, 0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 100.0]),
+            waypoint_information_distances=set([2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 80.0, 100.0]),
             world = self.world,
             collision_threshold = 10.0
         )
         self.env = SimplifyCarlaActionFilter(self.env)
         self.env = gym.wrappers.FilterObservation(self.env, ["gyroscope", "waypoints_information", "local_velocimeter"])
+        
         self.env = gym.wrappers.FlattenObservation(self.env)
         self.env = roar_py_rl_carla.FlattenActionWrapper(self.env)
-        self.env = gym.wrappers.RecordVideo(env, f"videos/{wandb_run.name}_eval_{wandb_run.id}")
-        self.env = Monitor(env, f"logs/{wandb_run.name}_{wandb_run.id}", allow_early_resets=True)
+        # self.env = gym.wrappers.RecordEpisodeStatistics(self.env)
+        # self.env = gym.wrappers.RecordVideo(self.env, f"videos/competition_eval")
+        # self.env = Monitor(self.env, f"logs/competition_eval", allow_early_resets=True)
 
 
         ''' get RL model '''
-        model_path = "models/rl_model_4099796_steps"
+        RUN_FPS= 25
+        training_params = dict(
+            learning_rate = 1e-5,  # be smaller 2.5e-4
+            #n_steps = 256 * RUN_FPS, #1024
+            batch_size=256,  # mini_batch_size = 256?
+            # n_epochs=10,
+            gamma=0.97,  # rec range .9 - .99 0.999997
+            ent_coef="auto",
+            target_entropy=-10.0,
+            # gae_lambda=0.95,
+            # clip_range_vf=None,
+            # vf_coef=0.5,
+            # max_grad_norm=0.5,
+            use_sde=True,
+            sde_sample_freq=RUN_FPS * 2,
+            # target_kl=None,
+            # tensorboard_log=(Path(misc_params["model_directory"]) / "tensorboard").as_posix(),
+            # create_eval_env=False,
+            # policy_kwargs=None,
+            verbose=1,
+            seed=1,
+            device=th.device('cuda' if th.cuda.is_available() else 'cpu'),
+            # _init_setup_model=True,
+        )
+        model_path = "sample_model"
         self.model = SAC.load(
             model_path,
-            env=self.env
+            env=self.env, 
+            **training_params
         )
 
         ''' reset env '''
         self.obs, info = self.env.reset()
-        # print('OBS:', self.obs)
 
-        # # Receive location, rotation and velocity data 
-        # vehicle_location = self.location_sensor.get_last_gym_observation()
-        # vehicle_rotation = self.rpy_sensor.get_last_gym_observation()
-        # vehicle_velocity = self.velocity_sensor.get_last_gym_observation()
-
-        # self.current_waypoint_idx = 10
-        # self.current_waypoint_idx = filter_waypoints(
-        #     vehicle_location,
-        #     self.current_waypoint_idx,
-        #     self.maneuverable_waypoints
-        # )
 
 
     async def step(

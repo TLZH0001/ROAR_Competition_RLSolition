@@ -145,8 +145,11 @@ async def evaluate_solution(
     )
     collision_sensor = vehicle.attach_collision_sensor(
         np.zeros(3),
-        np.zeros(3)
+        np.zeros(3),
+        name="collision_sensor"
     )
+    local_velocimeter_sensor = vehicle.attach_local_velocimeter_sensor("local_velocimeter")
+    gyroscope_sensor = vehicle.attach_gyroscope_sensor("gyroscope")
 
     assert camera is not None
     assert location_sensor is not None
@@ -154,18 +157,23 @@ async def evaluate_solution(
     assert rpy_sensor is not None
     assert occupancy_map_sensor is not None
     assert collision_sensor is not None
-
+    assert local_velocimeter_sensor is not None
+    assert gyroscope_sensor is not None
 
     # Start to run solution 
     solution : RoarCompetitionSolution = solution_constructor(
-        waypoints,
-        RoarCompetitionAgentWrapper(vehicle),
-        camera,
-        location_sensor,
-        velocity_sensor,
-        rpy_sensor,
-        occupancy_map_sensor,
-        collision_sensor
+        maneuverable_waypoints = waypoints, 
+        # vehicle = RoarCompetitionAgentWrapper(vehicle), 
+        vehicle = vehicle, 
+        camera_sensor = camera, 
+        location_sensor = location_sensor, 
+        velocity_sensor = velocity_sensor, 
+        rpy_sensor = rpy_sensor,
+        occupancy_map_sensor = occupancy_map_sensor, 
+        collision_sensor = collision_sensor, 
+        local_velocimeter_sensor = local_velocimeter_sensor, 
+        gyroscope_sensor = gyroscope_sensor, 
+        world = world
     )
     rule = RoarCompetitionRule(waypoints * 3,vehicle,world) # 3 laps
 
@@ -196,7 +204,8 @@ async def evaluate_solution(
         await rule.tick()
 
         # terminate if there is major collision
-        collision_impulse_norm = np.linalg.norm(collision_sensor.get_last_observation().impulse_normal)
+        collision_impulse = collision_sensor.get_last_observation().impulse_normals
+        collision_impulse_norm = np.linalg.norm(collision_impulse) if collision_impulse is not None else 0 
         if collision_impulse_norm > 100.0:
             # vehicle.close()
             print(f"major collision of tensity {collision_impulse_norm}")
@@ -229,7 +238,7 @@ async def main():
     carla_client.set_timeout(5.0)
     roar_py_instance = roar_py_carla.RoarPyCarlaInstance(carla_client)
     world = roar_py_instance.world
-    world.set_control_steps(0.05, 0.005)
+    world.set_control_steps(0.05, 0.01)
     world.set_asynchronous(False)
     evaluation_result = await evaluate_solution(
         world,
